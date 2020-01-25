@@ -1276,7 +1276,7 @@ multicore_decorator <- function(FUN) {
 ## -- --- Adds CountPriority from detector config file --------------------- -- ##
 ## This determines which detectors to use for counts when there is more than
 ## one detector in a lane, such as for video, Gridsmart and Wavetronix Matrix
-get_det_config <- function(date_) {
+get_det_config_prev <- function(date_) {
     
     read_det_config <- function(s3object, s3bucket) {
         aws.s3::s3read_using(read_feather, object = s3object, bucket = s3bucket)
@@ -1291,7 +1291,7 @@ get_det_config <- function(date_) {
         prefix = dirname(s3object))
     
     # If the s3 object exists, read it and return the data frame
-if (nrow(aws.s3::get_bucket_df(s3bucket, s3object)) > 0) {
+    if (nrow(aws.s3::get_bucket_df(s3bucket, s3object)) > 0) {
         read_det_config(s3object, s3bucket) %>%
             mutate(SignalID = as.character(SignalID),
                    Detector = as.integer(Detector), 
@@ -1309,6 +1309,47 @@ if (nrow(aws.s3::get_bucket_df(s3bucket, s3object)) > 0) {
         stop(glue("No detector config file for {date_}"))
     }
 }
+
+# This is a "function factory" 
+# It is meant to be used to create a get_det_config function that takes only the date:
+# like: get_det_config <- get_det_config_(conf$bucket)
+get_det_config_  <- function(bucket) { 
+
+    function(date_) {
+        read_det_config <- function(s3object, s3bucket) {
+            aws.s3::s3read_using(read_feather, object = s3object, bucket = s3bucket)
+        }
+        
+        s3bucket <- bucket 
+        s3object = glue("atspm_det_config_good/date={date_}/ATSPM_Det_Config_Good.feather")
+        
+        # Are there any files for this date?
+        s3objects <- aws.s3::get_bucket_df(
+            bucket = s3bucket, 
+            prefix = dirname(s3object))
+        
+        # If the s3 object exists, read it and return the data frame
+        if (nrow(aws.s3::get_bucket_df(s3bucket, s3object)) > 0) {
+            read_det_config(s3object, s3bucket) %>%
+                mutate(SignalID = as.character(SignalID),
+                       Detector = as.integer(Detector), 
+                       CallPhase = as.integer(CallPhase))
+        
+        # If the s3 object does not exist, but where there are objects for this date,
+        # read all files and bind rows (for when multiple ATSPM databases are contributing)
+        } else if (nrow(s3objects) > 0) {
+            lapply(s3objects$Key, function(x) {read_det_config(x, s3bucket)})  %>%
+                rbindlist() %>% as_tibble() %>%
+                mutate(SignalID = as.character(SignalID),
+                       Detector = as.integer(Detector), 
+                       CallPhase = as.integer(CallPhase))
+        } else {
+            stop(glue("No detector config file for {date_}"))
+        }
+    }
+}
+
+get_det_config  <- get_det_config_(conf$bucket)
 
 get_det_config_aog <- function(date_) {
     
@@ -1364,7 +1405,7 @@ get_det_config_vol <- function(date_) {
         transmute(SignalID = factor(SignalID), 
                   Detector = factor(Detector), 
                   CallPhase = factor(CallPhase),
-                  CountPriority,
+                  CountPriority = as.integer(CountPriority),
                   TimeFromStopBar = TimeFromStopBar,
                   Date = date(date_)) %>%
         group_by(SignalID, CallPhase) %>%
@@ -1569,7 +1610,7 @@ get_adjusted_counts <- function(filtered_counts) {
     det_config <- lapply(unique(filtered_counts$Date), get_det_config_vol) %>% 
         bind_rows() %>%
         mutate(SignalID = factor(SignalID))
-    
+   
     filtered_counts %>%
         left_join(det_config) %>%
         filter(!is.na(CountPriority)) %>%
