@@ -947,50 +947,10 @@ tryCatch({
     addtoRDS(sub_msfh, "sub_msfh.rds", "sf_freq", report_start_date, calcs_start_date)
     
     
-    # Peak/Off-Peak Split Failures
-    
-    # msfp <- msfh %>%
-    #     summarize_by_peak("Hour") %>%
-    #     map(~rename(., Month = Period))
-    
-    # wsfh <- get_weekly_avg_by_hr(sfh, "sf_freq", "cycles")
-    # wsfp <- wsfh %>%
-    #     summarize_by_peak("Hour") %>%
-    #     map(~rename(., Date = Period))
-    
-    # cor_msfp <- msfp %>% 
-    #     map(~get_cor_monthly_sf_by_day(., corridors))
-    # cor_wsfp <- wsfp %>% 
-    #     map(~get_cor_weekly_sf_by_day(., corridors))
-    
-    # sub_msfp <- msfp %>%
-    #     map(~get_cor_monthly_sf_by_day(., subcorridors)) %>%
-    #     map(~filter(., !is.na(Corridor)))
-    # sub_wsfp <- wsfp %>% 
-    #     map(~get_cor_weekly_sf_by_day(., subcorridors)) %>%
-    #     map(~filter(., !is.na(Corridor)))
-    
-    
-    # saveRDS(msfp, "msfp.rds")
-    # saveRDS(wsfp, "wsfp.rds")
-    # saveRDS(cor_msfp, "cor_monthly_sf_peak.rds")
-    # saveRDS(cor_wsfp, "cor_weekly_sf_peak.rds")
-    # 
-    # saveRDS(sub_msfp, "sub_monthly_sf_peak.rds")
-    # saveRDS(sub_wsfp, "sub_weekly_sf_peak.rds")
-    
-    
     rm(sfh)
     rm(msfh)
     rm(cor_msfh)
     rm(sub_msfh)
-    
-    # rm(msfp)
-    # rm(wsfp)
-    # rm(cor_msfp)
-    # rm(cor_wsfp)
-    # rm(sub_msfp)
-    # rm(sub_wsfp)
     
     #gc()
 }, error = function(e) {
@@ -1198,254 +1158,6 @@ tryCatch({
 
 
 
-# DETECTOR UPTIME AS REPORTED BY FIELD ENGINEERS ##############################
-
-print(glue("{Sys.time()} Uptimes [19 of 23]"))
-
-tryCatch({
-    # # VEH, PED UPTIME - AS REPORTED BY FIELD ENGINEERS via EXCEL
-    
-    keys <- aws.s3::get_bucket_df(conf$bucket, prefix = "manual_veh_ped_uptime")$Key
-    keys <- keys[endsWith(keys, ".xlsx")]
-    
-    months <- str_extract(basename(keys), "^\\S+ \\d{4}")
-    #xl_uptime_fns <- basename(keys)[!is.na(months)]
-    #xl_uptime_mos <- dmy(paste("1", months[!is.na(months)]))
-    
-    # xl_uptime_fns <- file.path(conf$xl_uptime$path, conf$xl_uptime$filenames)
-    # xl_uptime_fns <- conf$xl_uptime$filenames
-    # xl_uptime_mos <- conf$xl_uptime$months
-    
-    man_xl <- lapply(keys, 
-                     function(k) {
-                         get_det_uptime_from_manual_xl(
-                             bucket = conf$bucket, 
-                             key = k, 
-                             corridors = all_corridors)
-                     }) %>%
-        bind_rows() %>%
-        filter(!is.na(Zone_Group)) %>%
-        mutate(Corridor = factor(Corridor))
-    
-    # man_xl <- purrr::map2(
-    #     xl_uptime_fns,
-    #     xl_uptime_mos,
-    #     get_det_uptime_from_manual_xl
-    # ) %>%
-    #     bind_rows() %>%
-    #     mutate(Zone_Group = factor(Zone_Group)) %>%
-    #     filter(Month >= report_start_date)
-    
-    man_veh_xl <- man_xl %>% filter(Type == "Vehicle")
-    man_ped_xl <- man_xl %>% filter(Type == "Pedestrian")
-    
-    
-    cor_monthly_xl_veh_uptime <- man_veh_xl %>% # bind_rows(mrs_veh_xl, man_veh_xl) %>%
-        dplyr::select(-c(Zone_Group, Type)) %>%
-        get_cor_monthly_avg_by_day(all_corridors, "uptime", "num")
-    
-    
-    cor_monthly_xl_ped_uptime <- man_ped_xl %>% # bind_rows(mrs_ped_xl, man_ped_xl) %>%
-        dplyr::select(-c(Zone_Group, Type)) %>%
-        get_cor_monthly_avg_by_day(all_corridors, "uptime", "num")
-    
-    saveRDS(cor_monthly_xl_veh_uptime, "cor_monthly_xl_veh_uptime.rds")
-    saveRDS(cor_monthly_xl_ped_uptime, "cor_monthly_xl_ped_uptime.rds")
-    
-    
-}, error = function(e) {
-    print("ENCOUNTERED AN ERROR:")
-    print(e)
-})
-
-# # CCTV UPTIME From 511 and Encoders
-
-tryCatch({
-    
-    daily_cctv_uptime_511 <- get_daily_cctv_uptime("cctv_uptime", cam_config)
-    daily_cctv_uptime_encoders <- get_daily_cctv_uptime("cctv_uptime_encoders", cam_config)
-    
-    # up:
-    #   2-on 511 (dark brown)
-    #   1-working at encoder but not on 511 (light brown)
-    #   0-not working on either (gray)
-    daily_cctv_uptime <- full_join(daily_cctv_uptime_511,
-                                   daily_cctv_uptime_encoders,
-                                   by = c("Corridor", "CameraID", "Date"),
-                                   suffix = c("_511", "_enc")
-    ) %>%
-        replace(is.na(.), 0) %>%
-        select(Corridor, CameraID, Date, up_511, up_enc) %>%
-        mutate(uptime = up_511, 
-               num = 1,
-               up = pmax(up_511 * 2, up_enc),
-               Corridor = factor(Corridor),
-               CameraID = factor(CameraID))
-    
-    
-    # daily_cctv_uptime <- left_join(daily_cctv_uptime,
-    #                                daily_cctv_uptime_encoders,
-    #                                by=c("Corridor", "CameraID", "Date")) %>%
-    #     mutate(up = up.x,
-    #            num = num.x,
-    #            uptime = uptime.x)
-    
-    
-    # Find the days where uptime across the board is very low (close to 0)
-    #  This is symptomatic of a problem with the acquisition rather than the camreras themselves
-    bad_days <- daily_cctv_uptime %>%
-        group_by(Date) %>%
-        summarize(
-            sup = sum(uptime),
-            snum = sum(num),
-            suptime = sum(uptime) / sum(num)
-        ) %>%
-        filter(suptime < 0.2)
-    
-    monthly_cctv_uptime <- daily_cctv_uptime %>%
-        group_by(Corridor, CameraID, Month = floor_date(Date, unit = "months")) %>%
-        summarize(up = sum(uptime), uptime = weighted.mean(uptime, num), num = sum(num)) %>%
-        ungroup()
-    
-    cor_daily_cctv_uptime <- get_cor_weekly_avg_by_day(
-        daily_cctv_uptime,
-        all_corridors, "uptime", "num"
-    )
-    
-    weekly_cctv_uptime <- get_weekly_avg_by_day_cctv(daily_cctv_uptime)
-    
-    cor_weekly_cctv_uptime <- get_cor_weekly_avg_by_day(weekly_cctv_uptime, all_corridors, "uptime", "num")
-    cor_monthly_cctv_uptime <- get_cor_monthly_avg_by_day(monthly_cctv_uptime, all_corridors, "uptime", "num")
-    
-    
-    saveRDS(daily_cctv_uptime, "daily_cctv_uptime.rds")
-    saveRDS(weekly_cctv_uptime, "weekly_cctv_uptime.rds")
-    saveRDS(monthly_cctv_uptime, "monthly_cctv_uptime.rds")
-    
-    saveRDS(cor_daily_cctv_uptime, "cor_daily_cctv_uptime.rds")
-    saveRDS(cor_weekly_cctv_uptime, "cor_weekly_cctv_uptime.rds")
-    saveRDS(cor_monthly_cctv_uptime, "cor_monthly_cctv_uptime.rds")
-    
-}, error = function(e) {
-    print("ENCOUNTERED AN ERROR:")
-    print(e)
-})
-
-# # RSU UPTIME
-
-tryCatch({
-    
-    daily_rsu_uptime <- get_rsu_uptime(report_start_date)
-    cor_daily_rsu_uptime <- get_cor_weekly_avg_by_day(
-        daily_rsu_uptime, corridors, "uptime")
-    sub_daily_rsu_uptime <- get_cor_weekly_avg_by_day(
-        daily_rsu_uptime, subcorridors, "uptime")
-    
-    weekly_rsu_uptime <- get_weekly_avg_by_day(
-        mutate(daily_rsu_uptime, CallPhase = 0, Week = week(Date)), "uptime", peak_only = FALSE)
-    cor_weekly_rsu_uptime <- get_cor_weekly_avg_by_day(
-        weekly_rsu_uptime, corridors, "uptime")
-    sub_weekly_rsu_uptime <- get_cor_weekly_avg_by_day(
-        weekly_rsu_uptime, subcorridors, "uptime")
-    
-    monthly_rsu_uptime <- get_monthly_avg_by_day(
-        mutate(daily_rsu_uptime, CallPhase = 0), "uptime", peak_only = FALSE)
-    cor_monthly_rsu_uptime <- get_cor_monthly_avg_by_day(
-        monthly_rsu_uptime, corridors, "uptime")
-    sub_monthly_rsu_uptime <- get_cor_monthly_avg_by_day(
-        monthly_rsu_uptime, subcorridors, "uptime")
-    
-    
-    saveRDS(daily_rsu_uptime, "daily_rsu_uptime.rds")
-    saveRDS(weekly_rsu_uptime, "weekly_rsu_uptime.rds")
-    saveRDS(monthly_rsu_uptime, "monthly_rsu_uptime.rds")
-    
-    saveRDS(cor_daily_rsu_uptime, "cor_daily_rsu_uptime.rds")
-    saveRDS(cor_weekly_rsu_uptime, "cor_weekly_rsu_uptime.rds")
-    saveRDS(cor_monthly_rsu_uptime, "cor_monthly_rsu_uptime.rds")
-    
-    saveRDS(sub_daily_rsu_uptime, "sub_daily_rsu_uptime.rds")
-    saveRDS(sub_weekly_rsu_uptime, "sub_weekly_rsu_uptime.rds")
-    saveRDS(sub_monthly_rsu_uptime, "sub_monthly_rsu_uptime.rds")
-    
-    
-}, error = function(e) {
-    print("ENCOUNTERED AN ERROR:")
-    print(e)
-})
-
-
-
-
-
-
-
-
-
-# ACTIVITIES ##############################
-
-print(glue("{Sys.time()} TEAMS [20 of 23]"))
-
-tryCatch({
-    
-    teams <- get_teams_tasks_from_s3(
-        bucket = conf$bucket,
-        teams_locations_key = "mark/teams/teams_locations.feather",
-        archived_tasks_prefix = "mark/teams/tasks20",
-        current_tasks_key = "mark/teams/tasks.csv.zip",
-        replicate = TRUE
-    )
-    
-    tasks_by_type <- get_outstanding_tasks_by_param(
-        teams, "Task_Type", report_start_date)
-    tasks_by_subtype <- get_outstanding_tasks_by_param(
-        teams, "Task_Subtype", report_start_date)
-    tasks_by_priority <- get_outstanding_tasks_by_param(
-        teams, "Priority", report_start_date)
-    tasks_by_source <- get_outstanding_tasks_by_param(
-        teams, "Task_Source", report_start_date)
-    tasks_all <- get_outstanding_tasks_by_param(
-        teams, "All", report_start_date)
-    
-    cor_outstanding_tasks_by_day_range <- lapply(
-        dates, function(x) get_outstanding_tasks_by_day_range(teams, report_start_date, x)
-    ) %>%
-        bind_rows() %>%
-        mutate(Zone_Group = factor(Zone_Group),
-               Corridor = factor(Corridor)) %>%
-        
-        arrange(Zone_Group, Corridor, Month) %>%
-        group_by(Zone_Group, Corridor) %>% 
-        mutate(
-            delta.over45 = (over45 - lag(over45))/lag(over45),
-            delta.mttr = (mttr - lag(mttr))/lag(mttr)
-        ) %>%
-        ungroup()
-    
-    sig_outstanding_tasks_by_day_range <- cor_outstanding_tasks_by_day_range %>% 
-        group_by(Corridor) %>% 
-        filter(as.character(Zone_Group) == min(as.character(Zone_Group))) %>%
-        mutate(Zone_Group = Corridor) %>%
-        filter(Corridor %in% all_corridors$Corridor) %>%
-        ungroup()
-    
-    saveRDS(tasks_by_type, "tasks_by_type.rds") 
-    saveRDS(tasks_by_subtype, "tasks_by_subtype.rds") 
-    saveRDS(tasks_by_priority, "tasks_by_priority.rds") 
-    saveRDS(tasks_by_source, "tasks_by_source.rds") 
-    saveRDS(tasks_all, "tasks_all.rds") 
-    saveRDS(cor_outstanding_tasks_by_day_range, "cor_tasks_by_date.rds")
-    saveRDS(sig_outstanding_tasks_by_day_range, "sig_tasks_by_date.rds")
-
-}, error = function(e) {
-    print("ENCOUNTERED AN ERROR:")
-    print(e)
-})
-
-
-
-
-
 # # WATCHDOG ###########################################################
 
 print(glue("{Sys.time()} watchdog alerts [21 of 23]"))
@@ -1453,6 +1165,7 @@ print(glue("{Sys.time()} watchdog alerts [21 of 23]"))
 tryCatch({
     # -- Alerts: detector downtime --
     
+    print("Bad vehicle detectors")
     bad_detectors <- s3_read_parquet_parallel(
         bucket = conf$bucket,
         table_name = "bad_detectors",
@@ -1462,7 +1175,6 @@ tryCatch({
         transmute(
             SignalID = factor(SignalID),
             Detector = factor(Detector),
-            CallPhase = factor(CallPhase),
             Date = date(Date)
         ) %>% as_tibble()
     
@@ -1510,6 +1222,7 @@ tryCatch({
     
     # -- Alerts: pedestrian detector downtime --
     
+    print("Bad pedestrian detectors")
     bad_ped <- s3_read_parquet_parallel(
         bucket = conf$bucket,
         table_name = "bad_ped_detectors",
@@ -1547,36 +1260,7 @@ tryCatch({
     rm(bad_ped)
     
     # -- Alerts: CCTV downtime --
-    
-    # bad_cam <- tbl(conn, sql(glue("select * from {conf$athena$database}.cctv_uptime"))) %>%
-    #     dplyr::select(-starts_with("__")) %>%
-    #     filter(size == 0) %>%
-    #     collect() %>%
-    #     transmute(
-    #         CameraID = factor(cameraid),
-    #         Date = date(date)
-    #     ) %>%
-    #     filter(Date > today() - months(9)) %>%
-    #     left_join(cam_config, by = c("CameraID")) %>%
-    #     filter(Date > As_of_Date) %>%
-    #     left_join(distinct(all_corridors, Zone_Group, Zone, Corridor), by = c("Corridor")) %>%
-    #     transmute(
-    #         Zone_Group, Zone,
-    #         Corridor = factor(Corridor),
-    #         SignalID = factor(CameraID), 
-    #         CallPhase = factor(0), 
-    #         Detector = factor(0),
-    #         Date, Alert = factor("No Camera Image"), 
-    #         Name = factor(Location)
-    #     )
-    # 
-    # s3write_using(
-    #     bad_cam,
-    #     FUN = write_fst,
-    #     object = "mark/watchdog/bad_cameras.fst",
-    #     bucket = conf$bucket)
-    # rm(bad_cam)
-    
+
     # -- Watchdog Alerts --
     
     # Nothing to do here
@@ -1637,22 +1321,6 @@ sigify <- function(df, cor_df, corridors, identifier = "SignalID") {
         br %>% arrange(Zone_Group, Corridor, Date)
     }
 }
-
-
-# cor$mo$tasks$outstanding = readRDS("cor_monthly_outstanding_tasks.rds")
-# sig$mo$tasks$outstanding = readRDS("sig_monthly_outstanding_tasks.rds")
-# 
-# cor$mo$tasks$priority = readRDS("cor_monthly_priority.rds")
-# cor$mo$tasks$type = readRDS("cor_monthly_type.rds")
-# cor$mo$tasks$subtype = readRDS("cor_monthly_subtype.rds")
-# cor$mo$tasks$source = readRDS("cor_monthly_source.rds")
-# cor$mo$tasks$all = readRDS("cor_monthly_all.rds")
-# 
-# sig$mo$tasks$priority = readRDS("sig_monthly_priority.rds")
-# sig$mo$tasks$type = readRDS("sig_monthly_type.rds")
-# sig$mo$tasks$subtype = readRDS("sig_monthly_subtype.rds")
-# sig$mo$tasks$source = readRDS("sig_monthly_source.rds")
-# sig$mo$tasks$all = readRDS("sig_monthly_all.rds")
 
 tryCatch({
     cor <- list()

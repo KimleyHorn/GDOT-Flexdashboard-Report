@@ -67,23 +67,6 @@ signals_list <- unique(corridors$SignalID)
 
 print(Sys.time())
 
-# # GET CAMERA UPTIMES ########################################################
-
-print(glue("{Sys.time()} parse cctv logs [1 of 10]"))
-
-if (conf$run$cctv == TRUE) {
-    system("python parse_cctvlog.py", wait = FALSE) # Run python script asynchronously
-    system("python parse_cctvlog_encoders.py", wait = FALSE) # Run python script asynchronously
-}
-
-# # GET RSU UPTIMES ###########################################################
-
-print(glue("{Sys.time()} parse rsu logs [2 of 10]"))
-
-if (conf$run$rsus == TRUE) {
-    system("python parse_rsus.py", wait = FALSE) # Run python script asynchronously
-}
-
 # # TRAVEL TIMES FROM RITIS API ###############################################
 
 print(glue("{Sys.time()} travel times [3 of 10]"))
@@ -108,7 +91,7 @@ if (conf$run$counts == TRUE) {
             uptime = TRUE, 
             counts = TRUE)
     } else {
-        foreach(date_ = date_range) %dopar% {
+        foreach(date_ = date_range) %do% {
             get_counts2(
                 date_, 
                 bucket = conf$bucket, 
@@ -322,8 +305,8 @@ get_counts_based_measures <- function(month_abbrs) {
 
         counts_ped_1hr <- s3_read_parquet_parallel(
             "counts_ped_1hr",
-            as.character(start_date),
-            as.character(end_date),
+            as.character(sd),
+            as.character(ed),
             bucket = conf$bucket
         )
         
