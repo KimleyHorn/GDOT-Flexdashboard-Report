@@ -925,7 +925,8 @@ renderValueBox({
             zone = zone_group(), 
             mo = current_month(), 
             break_ = TRUE),
-        icon = "fa-car"
+        icon = "fa-car",
+        color = VDOT_BLUE
     )
 })
 ```
@@ -942,8 +943,8 @@ renderValueBox({
             zone = zone_group(),
             mo = current_month(),
             break_ = TRUE),
-        icon = "fa-car"
-    )
+        icon = "fa-car",
+    color = VDOT_BLUE)
 })
 ```
 
@@ -954,7 +955,8 @@ renderValueBox({
   valueBox(
       value = get_valuebox(cor$mo$tti, "tti", as_2dec,
                            zone = zone_group(), mo = current_month(), break_ = TRUE),
-      icon = "fa-dashboard"
+      icon = "fa-dashboard",
+      color = VDOT_BLUE
   )
 })
 ```
@@ -966,7 +968,8 @@ renderValueBox({
   valueBox(
       value = get_valuebox(cor$mo$pti, "pti", as_2dec,
                            zone = zone_group(), mo = current_month(), break_ = TRUE),
-      icon = "fa-dashboard"
+      icon = "fa-dashboard",
+      color = VDOT_BLUE
   )
 })
 ```
