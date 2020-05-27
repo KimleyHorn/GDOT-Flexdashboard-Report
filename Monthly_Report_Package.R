@@ -1658,27 +1658,35 @@ tryCatch({
                 bucket = conf$bucket, 
                 object = obj
             ) %>%
-                mutate(month = yyyymmdd) %>% 
-                filter(!is.na(date))
+                #mutate(month = yyyymmdd) %>% 
+                filter(!is.na(date)) %>% 
+                transmute(
+                    Zone = zone, 
+                    Corridor = corridor, 
+                    analysis_month = ymd(yyyymmdd),
+                    month_hour = mdy_hms(date), # YYYY-mm-dd HH:MM:SS
+                    month_hour = month_hour - days(day(month_hour)) + days(1), # YYYY-mm-01 HH:MM:SS
+                    Month = date(floor_date(month_hour, "month")), # YYYY-mm-01  # year_month
+                    delay_cost = combined.delay_cost)
             
         }
     }) %>% bind_rows()
     
     hourly_udc <- udc %>% 
-        transmute(
-            Zone = zone, 
-            Corridor = corridor, 
-            month_hour = mdy_hms(date), # YYYY-mm-dd HH:MM:SS
-            month_hour = month_hour - days(day(month_hour)) + days(1), # YYYY-mm-01 HH:MM:SS
-            Month = date(floor_date(month_hour, "month")), # YYYY-mm-01  # year_month
-            delay_cost = combined.delay_cost) %>% 
+        # transmute(
+        #     Zone = zone, 
+        #     Corridor = corridor, 
+        #     month_hour = mdy_hms(date), # YYYY-mm-dd HH:MM:SS
+        #     month_hour = month_hour - days(day(month_hour)) + days(1), # YYYY-mm-01 HH:MM:SS
+        #     Month = date(floor_date(month_hour, "month")), # YYYY-mm-01  # year_month
+        #     delay_cost = combined.delay_cost) %>% 
         group_by(Zone, Corridor, Month, month_hour) %>%  # year_month
         summarize(delay_cost = sum(delay_cost, na.rm = TRUE)) %>% 
         ungroup() 
     
     
-    months <- unique(udc$month)
-    udc_trend_table <- lapply(months[2:length(months)], function(current_month) {
+    months <- unique(udc$analysis_month)
+    udc_trend_table_list <- lapply(months[2:length(months)], function(current_month) {
         #current_month <- max(udc$month)
         last_month <- current_month - months(1)
         last_year <- current_month - years(1)
@@ -1688,25 +1696,25 @@ tryCatch({
         last_year_col <- as.name(format(last_year, "%B %Y"))
         
         
-        udc %>% 
-            filter(month <= current_month) %>%
-            transmute(
-                Zone = zone, 
-                Corridor = corridor, 
-                date = date(mdy_hms(date)), 
-                month = floor_date(date, "months"),
-                delay_cost = combined.delay_cost) %>% 
+        udc_trend_table_list <- udc %>% 
+            filter(analysis_month <= current_month) %>%
+            # transmute(
+            #     Zone = zone, 
+            #     Corridor = corridor, 
+            #     date = date(mdy_hms(date)), 
+            #     month = floor_date(date, "months"),
+            #     delay_cost = combined.delay_cost) %>% 
             filter(
-                month %in% c(current_month, last_month, last_year)) %>%
+                Month %in% c(current_month, last_month, last_year)) %>%
             group_by(
-                Zone, Corridor, month) %>% 
+                Zone, Corridor, Month) %>% 
             summarize(
                 delay_cost = sum(delay_cost, na.rm = TRUE)) %>%
             ungroup() %>%
             mutate(
-                month = format(month, "%B %Y")) %>%
+                Month = format(Month, "%B %Y")) %>%
             spread(
-                month, delay_cost) %>% 
+                Month, delay_cost) %>% 
             mutate(
                 Month = current_month,
                 `Month-over-Month` = (!!current_month_col - !!last_month_col) / !!last_month_col, 
@@ -1716,11 +1724,12 @@ tryCatch({
                 !!last_year_col, `Year-over-Year`, 
                 !!last_month_col, `Month-over-Month`, 
                 !!current_month_col)
-    }) %>% bind_rows()
+    }) #%>% bind_rows()
+    names(udc_trend_table_list) <- months[2:length(months)]
     
     
     saveRDS(hourly_udc, "hourly_udc.rds")
-    saveRDS(udc_trend_table, "udc_trend_table.rds")
+    saveRDS(udc_trend_table_list, "udc_trend_table_list.rds")
     
 
 }, error = function(e) {
@@ -1873,7 +1882,7 @@ tryCatch({
         "mttr" = readRDS("cor_tasks_by_date.rds") %>%
             transmute(Zone_Group, Corridor, Month, mttr, delta = delta.mttr),
         "hourly_udc" = readRDS("hourly_udc.rds"),
-        "udc_trend_table" = readRDS("udc_trend_table.rds")
+        "udc_trend_table" = readRDS("udc_trend_table_list.rds")
     )
     cor$qu <- list(
         "vpd" = get_quarterly(cor$mo$vpd, "vpd"),

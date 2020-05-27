@@ -2483,8 +2483,8 @@ shinyApp(
           
             isolate({
                 latest_comment <- get_latest_comment(zmdf, memory$zone, memory$month)
-                print(latest_comment)
-                print(input$editor1)
+#                print(latest_comment)
+#                print(input$editor1)
                 if (is.na(input$editor1) || is.na(latest_comment) || input$editor1 != latest_comment) {
                     zmdf <<- tibble::add_row(
                         zmdf,

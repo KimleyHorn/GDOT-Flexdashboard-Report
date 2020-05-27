@@ -182,7 +182,7 @@ zone_colors <- data.frame(
 #)
 ```
 
-```{r Intersections, echo=FALSE, eval=FALSE}
+```{r Intersections, echo=FALSE, eval=TRUE}
 
 # --- Intersections (Point Layer) ---
 
@@ -199,7 +199,7 @@ ints <- s3read_using(
     filter(Latitude != 0, Longitude != 0) %>% 
     mutate(SignalID = factor(SignalID))
 
-signals <- left_join(ints, corridors, by = c("SignalID")) %>%
+signals_sp <- left_join(ints, corridors, by = c("SignalID")) %>%
     mutate(
         Corridor = forcats::fct_explicit_na(Corridor, na_level = "None")) %>%
     left_join(corridor_colors, by = c("Corridor")) %>%
@@ -217,7 +217,7 @@ signals <- left_join(ints, corridors, by = c("SignalID")) %>%
         stroke_color = ifelse(Corridor == "None", GRAY, BLACK),
         # If part of a Zone (RTOP), override black outer to corridor color
         stroke_color = ifelse(grepl("^Z", Zone), color, stroke_color))
-Encoding(signals$Description) <- "utf-8"
+Encoding(signals_sp$Description) <- "utf-8"
 ```
 
 ```{r TMC Segments from s3 xlsx, echo=FALSE, eval=TRUE}
@@ -311,10 +311,11 @@ z <- tmcs %>%
             })
         )
 
-zed <- do.call(rbind, z$sp_data) %>%
+corridors_sp <- do.call(rbind, z$sp_data) %>%
     SpatialLinesDataFrame(z, match.ID = FALSE)
 
-sz <- tmcs %>% filter(!is.na(Subcorridor)) %>% 
+sz <- tmcs %>% 
+    filter(!is.na(Subcorridor)) %>% 
     mutate(
         tmc_coords = purrr::map(coordinates, get_tmc_coords),
         sp_data = purrr::map(
@@ -323,26 +324,32 @@ sz <- tmcs %>% filter(!is.na(Subcorridor)) %>%
             })
         )
 
-szed <- do.call(rbind, sz$sp_data) %>%
+subcorridors_sp <- do.call(rbind, sz$sp_data) %>%
     SpatialLinesDataFrame(sz, match.ID = FALSE)
 
 
-map_data <- list(tmc_sp = zed, subcorr_tmc_sp = szed, signals_sp = signals)
+map_data <- list(
+    corridors_sp = corridors_sp, 
+    subcorridors_sp = subcorridors_sp, 
+    signals_sp = signals_sp)
 ```
 
 ```{r, eval=FALSE}
 # == Save locally and to S3 == ==
-saveRDS(map_data,
-        "map_data.rds")
-qsave(map_data, "c:/Users/alan.toppen/Code/GDOT/Gui/map_data.qs", preset="fast")
-s3saveRDS(map_data,
-          bucket = "gdot-spm",
-          object = "map_data.rds")
+qsave(map_data, "map_data.qs")
+put_object("map_data.qs", 
+           bucket = "gdot-spm",
+           object = "map_data.qs",
+           multipart = TRUE)
+# s3write_using(qsave, 
+#               map_data, 
+#               bucket = "gdot-spm",
+#               object = "map_data.qs")
 # == == == ==
 ```
 
 ```{r Read Map Data, echo=FALSE}
-map_data <- readRDS("map_data.rds")
+map_data <- qread("map_data.qs")
 ```
 
 

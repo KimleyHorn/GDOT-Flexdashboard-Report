@@ -1,8 +1,8 @@
 
 # Monthly_Report config file (yaml format)
 
-#mode: production
-mode: beta
+mode: production
+#mode: beta
 
 agency: GDOT
 bucket: gdot-spm
@@ -20,25 +20,25 @@ atspm:
 
 # Sections of Monthly_Report_Calcs_ec2 to run
 run:
-    cctv: TRUE
-    rsus: TRUE
-    travel_times: TRUE
-    counts: TRUE
+    cctv: FALSE
+    rsus: FALSE
+    travel_times: FALSE
+    counts: FALSE
     counts_based_measures: TRUE
-    etl: TRUE
-    arrivals_on_green: TRUE
-    queue_spillback: TRUE
-    split_failures: TRUE
-    ped_delay: TRUE
+    etl: FALSE
+    arrivals_on_green: FALSE
+    queue_spillback: FALSE
+    split_failures: FALSE
+    ped_delay: FALSE
 
 
-start_date: yesterday
+start_date: 2020-05-01
 end_date: yesterday
 
-report_start_date: 2019-03-01
+report_start_date: 2019-04-01
 report_end_date: yesterday
-calcs_start_date: 2020-04-01
-production_report_end_date: 2020-03-01
+calcs_start_date: 2020-05-01
+production_report_end_date: 2020-04-01
 
 corridors_filename_s3: Corridors_Latest.xlsx
 corridors_TMCs_filename_s3: Corridor_TMCs_Latest.xlsx

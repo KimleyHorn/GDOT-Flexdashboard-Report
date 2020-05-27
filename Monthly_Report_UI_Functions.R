@@ -70,7 +70,12 @@ colrs <- c("1" = LIGHT_BLUE, "2" = BLUE,
            "7" = LIGHT_ORANGE, "8" = ORANGE, 
            "9" = LIGHT_PURPLE, "10" = PURPLE, 
            "11" = LIGHT_BROWN, "12" = BROWN,
-           "0" = DARK_GRAY)
+           "0" = DARK_GRAY,
+           "Mainline" = BLUE,
+           "Passage" = GREEN,
+           "Demand" = RED,
+           "Queue" = ORANGE,
+           "Other" = DARK_GRAY)
 
 RTOP1_ZONES <- c("Zone 1", "Zone 2", "Zone 3", "Zone 8")
 RTOP2_ZONES <- c("Zone 4", "Zone 5", "Zone 6", "Zone 7m", "Zone 7d")
@@ -165,9 +170,16 @@ s3checkFunc <- function(bucket, object) {
     }
 }
 s3valueFunc <- function(bucket, object, aws_conf) {
+
+    read_function <- if (endsWith(object, ".qs")) {
+        qs::qread
+    } else if (endsWith(object, ".feather")) {
+        read_feather
+    }
+    
     function() {
         aws.s3::s3read_using(
-            qs::qread,
+            read_function,
             object = object,
             bucket = bucket,
             opts = list(key = aws_conf$AWS_ACCESS_KEY_ID,
@@ -219,14 +231,15 @@ if (conf$mode == "production") {
 
     corridors_key <- sub("\\..*", ".feather", paste0("all_", conf$corridors_filename_s3))
     #corridors <- s3reactivePoll(poll_interval, bucket = conf$bucket, object = corridors_key, aws_conf)
-    corridors <- reactivePoll(poll_interval, session = NULL,
-        checkFunc = s3checkFunc(conf$bucket, corridors_key),
-        valueFunc = function() {aws.s3::s3read_using(
-            read_feather, 
-            object = corridors_key, 
-            bucket = conf$bucket,
-            opts = list(key = aws_conf$AWS_ACCESS_KEY_ID,
-            secret = aws_conf$AWS_SECRET_ACCESS_KEY))})
+    #corridors <- reactivePoll(poll_interval, session = NULL,
+    #    checkFunc = s3checkFunc(conf$bucket, corridors_key),
+    #    valueFunc = function() {aws.s3::s3read_using(
+    #        read_feather, 
+    #        object = corridors_key, 
+    #        bucket = conf$bucket,
+    #        opts = list(key = aws_conf$AWS_ACCESS_KEY_ID,
+    #        secret = aws_conf$AWS_SECRET_ACCESS_KEY))})
+    corridors <- s3reactivePoll(poll_interval, bucket = conf$bucket, object = corridors_key, aws_conf)
 
     cordata <- s3reactivePoll(poll_interval, bucket = conf$bucket, object = "cor_ec2.qs", aws_conf)
     sigdata <- s3reactivePoll(poll_interval, bucket = conf$bucket, object = "sig_ec2.qs", aws_conf)
@@ -272,6 +285,7 @@ goal <- list("tp" = NULL,
              "cu" = 0.95,
              "pau" = 0.95)
 
+
 get_athena_connection <- function(conf_athena, f = dbConnect) {
     
     drv <- JDBC(driverClass = "com.simba.athena.jdbc.Driver",
@@ -296,7 +310,12 @@ get_athena_connection <- function(conf_athena, f = dbConnect) {
                   UseResultsetStreaming = 1)
     }
 }
-get_athena_connection_pool <- function(conf_athena) {get_athena_connection(conf_athena, dbPool)}
+
+
+get_athena_connection_pool <- function(conf_athena) {
+    get_athena_connection(conf_athena, dbPool)
+}
+
 
 get_athena_connection_needs_boto3 <- function(conf_athena) {
     dbConnect(
@@ -308,9 +327,8 @@ get_athena_connection_needs_boto3 <- function(conf_athena) {
 }
 
 
-
-get_aurora_connection <- function() {
-    dbPool(
+get_aurora_connection <- function(aws_conf, f = dbConnect) {
+    f(
         drv = RMySQL::MySQL(),
         host = aws_conf$RDS_HOST,
         dbname = aws_conf$RDS_DATABASE,
@@ -319,7 +337,8 @@ get_aurora_connection <- function() {
         password = aws_conf$RDS_PASSWORD
     )
 }
-#aurora <- get_aurora_connection()
+#aurora <- get_aurora_connection(aws_conf, f = dbPool)
+
 
 read_zipped_feather <- function(x) {
     read_feather(unzip(x))
@@ -2033,8 +2052,9 @@ volplot_plotly <- function(df, title = "title", ymax = 1000) {
 }
 
 
-volplot_plotly2 <- function(signalid, plot_start_date, plot_end_date, title = "title", ymax = 1000) {
-    
+volplot_plotly2 <- function(db, signalid, plot_start_date, plot_end_date, title = "title", ymax = 1000) {
+    # db is either conf$athena (list) or aurora (Pool)
+
     if (is.null(ymax)) {
         yax <- list(rangemode = "tozero", tickformat = ",.0")
     } else {
@@ -2096,26 +2116,61 @@ volplot_plotly2 <- function(signalid, plot_start_date, plot_end_date, title = "t
                                       font = list(size = 12),
                                       showarrow = FALSE))
     }
-    rc <- tbl(aurora, "counts_1hr") %>% 
-        filter(
-            SignalID == signalid, 
-            Timeperiod >= plot_start_date, 
-            Timeperiod < plot_end_date)
-    fc <- tbl(aurora, "filtered_counts_1hr") %>% 
-        filter(
-            SignalID == signalid, 
-            Timeperiod >= plot_start_date, 
-            Timeperiod < plot_end_date)
-    
-    df <- left_join(
-        fc, 
-        rc, 
-        by = c("SignalID", "Date", "Timeperiod", "Detector", "CallPhase"), 
-        suffix = c("_fc", "_rc")) %>%
-        arrange(SignalID, Detector, Timeperiod) %>%
-        mutate(bad_day = if_else(is.na(vol_fc), TRUE, FALSE)) %>% 
-        select(-Date, -vol_fc) %>% 
-        collect()
+    if (class(db) == "list") {
+        # db = conf$athena
+        athena <- get_athena_connection(db)
+        rc <- tbl(athena, sql(glue(paste(
+            "SELECT signalid, date, timeperiod, detector, callphase, vol",
+            "FROM {db$database}.counts_1hr",
+            "WHERE signalid = '{signalid}'",
+            "AND date BETWEEN '{plot_start_date}' AND '{plot_end_date}'"))))
+        fc <- tbl(athena, sql(glue(paste(
+            "SELECT signalid, date, timeperiod, detector, callphase, vol",
+            "FROM {db$database}.filtered_counts_1hr",
+            "WHERE signalid = '{signalid}'",
+            "AND date BETWEEN '{plot_start_date}' AND '{plot_end_date}'"))))
+        df <- left_join(
+            fc, 
+            rc, 
+            by = c("signalid", "date", "timeperiod", "detector", "callphase"), 
+            suffix = c("_fc", "_rc")) %>%
+            arrange(signalid, detector, timeperiod) %>%
+            mutate(bad_day = if_else(is.na(vol_fc), TRUE, FALSE)) %>% 
+            select(-date, -vol_fc) %>% 
+            collect() %>%
+            transmute(
+                SignalID = factor(signalid), 
+                Timeperiod = ymd_hms(timeperiod), 
+                Detector = factor(detector), 
+                CallPhase = factor(callphase),
+                vol_rc = as.integer(vol_rc),
+                bad_day)
+        
+    } else if (class(db) == "Pool") {
+        # db = aurora connection pool
+        conn <- poolCheckout(db)
+        rc <- tbl(conn, "counts_1hr") %>% 
+            filter(
+                SignalID == signalid, 
+                Timeperiod >= plot_start_date, 
+                Timeperiod < plot_end_date)
+        fc <- tbl(conn, "filtered_counts_1hr") %>% 
+            filter(
+                SignalID == signalid, 
+                Timeperiod >= plot_start_date, 
+                Timeperiod < plot_end_date)
+        
+        df <- left_join(
+            fc, 
+            rc, 
+            by = c("SignalID", "Date", "Timeperiod", "Detector", "CallPhase"), 
+            suffix = c("_fc", "_rc")) %>%
+            arrange(SignalID, Detector, Timeperiod) %>%
+            mutate(bad_day = if_else(is.na(vol_fc), TRUE, FALSE)) %>% 
+            select(-Date, -vol_fc) %>% 
+            collect()
+        poolReturn(conn)
+    }
     
     #dbDisconnect(conn)
     
@@ -2222,12 +2277,12 @@ udcplot_plotly <- function(hourly_udc) {
                    yaxis = list(title = "",
                                 tickformat = "$,.2",
                                 range = c(0, ymax_)),
-                   annotations = list(text = title_,
+                   annotations = list(text = glue("<b>{title_}</b>"),
                                       font = list(size = 14),
                                       xref = "paper",
                                       yref = "paper",
                                       yanchor = "bottom",
-                                      xanchor = "center",
+                                      xanchor = "left",
                                       align = "center",
                                       x = 0.2,
                                       y = 0.5,
@@ -2375,7 +2430,7 @@ signal_dashboard_athena <- function(sigid, start_date, conf_athena, pth = "s3") 
                 #------------------------
                 df <- tbl(conn, sql(glue(paste(
                     "select signalid, detector, callphase, timeperiod, vol",
-                    "from gdot_spm.counts_1hr",
+                    "from {conf$athena$database}.counts_1hr",
                     "where signalid = '{sigid}'",
                     "and date between '{start_date}' and '{end_date}'")))) %>%
                     collect()
@@ -2402,7 +2457,7 @@ signal_dashboard_athena <- function(sigid, start_date, conf_athena, pth = "s3") 
                 #------------------------
                 df <- tbl(conn, sql(glue(paste(
                     "select signalid, detector, callphase, timeperiod, vol", 
-                    "from gdot_spm.filtered_counts_1hr", 
+                    "from {conf$athena$database}.filtered_counts_1hr", 
                     "where signalid = '{sigid}'",
                     "and date between '{start_date}' and '{end_date}'")))) %>%
                     collect()
@@ -2427,7 +2482,7 @@ signal_dashboard_athena <- function(sigid, start_date, conf_athena, pth = "s3") 
                 #------------------------
                 df <- tbl(conn, sql(glue(paste(
                     "select signalid, callphase, date, vpd", 
-                    "from gdot_spm.vehicles_pd", 
+                    "from {conf$athena$database}.vehicles_pd", 
                     "where signalid = '{sigid}'", 
                     "and date between '{start_date}' and '{end_date}'")))) %>%
                     collect()
@@ -2461,7 +2516,7 @@ signal_dashboard_athena <- function(sigid, start_date, conf_athena, pth = "s3") 
                 #------------------------
                 df <- tbl(conn, sql(glue(paste(
                     "select signalid, detector, callphase, timeperiod, good_day", 
-                    "from gdot_spm.filtered_counts_1hr", 
+                    "from {conf$athena$database}.filtered_counts_1hr", 
                     "where signalid = '{sigid}'", 
                     "and date between '{start_date}' and '{end_date}'")))) %>%
                     collect()
@@ -2486,7 +2541,7 @@ signal_dashboard_athena <- function(sigid, start_date, conf_athena, pth = "s3") 
                 #------------------------
                 df <- tbl(conn, sql(glue(paste(
                     "select signalid, callphase, date, date_hour, uptime", 
-                    "from gdot_spm.comm_uptime", 
+                    "from {conf$athena$database}.comm_uptime", 
                     "where signalid = '{sigid}'", 
                     "and date between '{start_date}' and '{end_date}'")))) %>%
                     collect()
@@ -2513,7 +2568,7 @@ signal_dashboard_athena <- function(sigid, start_date, conf_athena, pth = "s3") 
                 #------------------------
                 df <- tbl(conn, sql(glue(paste(
                     "select signalid, callphase, date, date_hour, aog", 
-                    "from gdot_spm.arrivals_on_green", 
+                    "from {conf$athena$database}.arrivals_on_green", 
                     "where signalid = '{sigid}'", 
                     "and date between '{start_date}' and '{end_date}'")))) %>%
                     collect()
@@ -2543,7 +2598,7 @@ signal_dashboard_athena <- function(sigid, start_date, conf_athena, pth = "s3") 
                 #------------------------
                 df <- tbl(conn, sql(glue(paste(
                     "select signalid, callphase, date, date_hour, qs_freq", 
-                    "from gdot_spm.queue_spillback", 
+                    "from {conf$athena$database}.queue_spillback", 
                     "where signalid = '{sigid}'", 
                     "and date between '{start_date}' and '{end_date}'")))) %>%
                     collect()
@@ -2575,7 +2630,7 @@ signal_dashboard_athena <- function(sigid, start_date, conf_athena, pth = "s3") 
                 #------------------------
                 df <- tbl(conn, sql(glue(paste(
                     "select signalid, callphase, date, date_hour, sf_freq", 
-                    "from gdot_spm.split_failures", 
+                    "from {conf$athena$database}.split_failures", 
                     "where signalid = '{sigid}'", 
                     "and date between '{start_date}' and '{end_date}'")))) %>%
                     collect()
@@ -2656,7 +2711,7 @@ detector_dashboard_athena <- function(sigid, start_date, conf_athena, pth = "s3"
                 #------------------------
                 df <- tbl(conn, sql(glue(paste(
                     "select signalid, detector, callphase, timeperiod, vol", 
-                    "from gdot_spm.counts_1hr", 
+                    "from {conf$athena$database}.counts_1hr", 
                     "where signalid = '{sigid}' and date between '{start_date}' and '{end_date}'")))) %>%
                     collect()
                 df <- df %>%
@@ -2687,7 +2742,7 @@ detector_dashboard_athena <- function(sigid, start_date, conf_athena, pth = "s3"
                 #------------------------
                 df <- tbl(conn, sql(glue(paste(
                     "select signalid, detector, callphase, timeperiod, vol", 
-                    "from gdot_spm.filtered_counts_1hr",
+                    "from {conf$athena$database}.filtered_counts_1hr",
                     "where signalid = '{sigid}' and date between '{start_date}' and '{end_date}'")))) %>%
                     collect()
                 df <- df %>%
@@ -2712,7 +2767,7 @@ detector_dashboard_athena <- function(sigid, start_date, conf_athena, pth = "s3"
                 #------------------------
                 df <- tbl(conn, sql(glue(paste(
                     "select signalid, detector, callphase, timeperiod, good_day", 
-                    "from gdot_spm.filtered_counts_1hr", 
+                    "from {conf$athena$database}.filtered_counts_1hr", 
                     "where signalid = '{sigid}' and date between '{start_date}' and '{end_date}'")))) %>%
                     collect()
                 df <- df %>%

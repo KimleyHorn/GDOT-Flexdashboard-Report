@@ -3,6 +3,7 @@ library(dplyr)
 library(tidyr)
 library(lubridate)
 library(purrr)
+library(readr)
 
 
 get_summary_data <- function(df, current_month = NULL) {
@@ -34,6 +35,7 @@ get_summary_data <- function(df, current_month = NULL) {
             -uptime.sb,
             -uptime.pr,
             #-num,
+            -starts_with("Description"),
             -starts_with("ones"),
             -starts_with("cycles"),
             -starts_with("pct"),
@@ -61,7 +63,7 @@ get_summary_data <- function(df, current_month = NULL) {
 sub <- s3readRDS(bucket = "gdot-spm", object = "sub_ec2.rds")
 cor <- s3readRDS(bucket = "gdot-spm", object = "cor_ec2.rds")
 
-current_month <- ymd("2020-03-01")
+current_month <- ymd("2020-04-01")
 
 csd <- get_summary_data(sub)
 cmd <- get_summary_data(cor)
@@ -81,4 +83,4 @@ lapply(sub$dy, names)
 
 
                                     
-write_csv(data, "health_metrics_data_2020-01-27.csv")
+write_csv(csd, "health_metrics_data_2020-05-18.csv")
